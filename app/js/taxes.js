@@ -129,7 +129,8 @@ export async function periodView(period, query) {
       <div class="hint">For purchases not itemized above, such as the Amazon items you marked as used.</div></div>
 
     <h2>4. The return</h2>
-    ${worksheetTable(ret)}
+    ${locked && tp.filed.lines ? `<p class="small">Showing the numbers as filed on ${ui.esc(ui.niceDate(tp.filed.on))}.</p>` : ''}
+    ${worksheetTable(locked && tp.filed.lines ? { ...ret, lines: { ...ret.lines, ...tp.filed.lines } } : ret)}
     <div class="actions"><button type="button" id="print">Print worksheet</button></div>
 
     <h2>5. File in eFile</h2>
