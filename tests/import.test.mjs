@@ -90,3 +90,35 @@ test('stripe: sale and fee lines add up to net; payouts are transfers', () => {
   assert.equal(rows[0].suggestion.category_code, '4030');
   assert.equal(rows.find((r) => r.source_ref === 'txn_2').suggestion.category_code, '9030');
 });
+
+import { parseAmexStatement, parseUsBankStatement } from '../app/js/import/card-statements.js';
+
+test('amex statement: charges negative, payments positive, balances check', () => {
+  const text = ['Closing Date 03/09/26 Next Closing Date 04/08/26', 'Account Summary', 'Previous Balance', 'Payments/Credits', '$100.00', '-$50.00',
+    'New Standard Bal. Charges', 'New Payment Terms Charges', '+$30.00', '+$0.00', 'Fees', 'Interest Charges', '+$39.00', '+$0.00', 'Total Balance', 'Minimum Payment Due', '$119.00', '$0.00',
+    '02/08/26* ONLINE PAYMENT - THANK YOU -$50.00', '02/09/26 AMAZON MARKETPLACE NA PA AMZN.COM/BILL WA', 'AMZN.COM/BILL', '$30.00', '02/10/26* RETURNED PAYMENT FEE $39.00'].join('\n');
+  const r = parseAmexStatement(text);
+  assert.equal(r.rows.length, 3);
+  assert.equal(r.rows[0].amount_cents, 5000);
+  assert.equal(r.rows[1].amount_cents, -3000);
+  assert.equal(r.balanced, true);
+});
+
+test('us bank statement: purchases, fee reversals (CR) and interest; balances check', () => {
+  const text = [
+    'Open Date:    09/10/2026     Closing Date:   10/08/2026',
+    '                                            Previous Balance                 +           $2,950.08',
+    '                                            New Balance                      =           $3,020.34',
+    '   10/06   10/06            LATE FEE - PAYMENT DUE ON 10/06                                            $40.00',
+    '   10/07   10/07            REVERSAL OF LATE PAYMENT FEE                                               $40.00CR',
+    '   10/07   10/07            REVERSAL OF LATE PAYMENT FEE                                               $40.00CR',
+    '   09/12   09/12    4230    AMAZON MARK* 5O3JQ1PG0 SEATTLE      WA                                     $40.00',
+    '   10/08                    INTEREST CHARGE ON PURCHASES                                               $70.26',
+    '                            TOTAL INTEREST FOR THIS PERIOD                                             $70.26',
+  ].join('\n');
+  const r = parseUsBankStatement(text);
+  assert.equal(r.rows.length, 5);
+  assert.equal(r.rows[1].amount_cents, 4000);
+  assert.equal(r.rows[3].date, '2026-09-12');
+  assert.equal(r.balanced, true);
+});
