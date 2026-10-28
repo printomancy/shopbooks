@@ -205,6 +205,7 @@ export async function lineView(id, query) {
 
   // Starting splits: what was saved, else the suggestion, else one empty row.
   let splits = l.allocation ? l.allocation.splits.map((s) => ({ ...s }))
+    : sug && sug.splits ? sug.splits.map((x) => ({ category_code: x.category_code, amount_cents: x.amount_cents, member: normMember(x.member || null) }))
     : sug ? [{ category_code: sug.category_code, amount_cents: l.amount_cents, member: normMember(sug.member) }]
     : [{ category_code: '', amount_cents: l.amount_cents, member: null }];
   // A transfer that lost a fee on the way: split the fee out on the sending side.
@@ -230,7 +231,7 @@ export async function lineView(id, query) {
       <div class="small">${ui.esc(pair.description)}</div><a class="small" href="#/line/${pair.id}">Open the other side</a></div>` : ''}
 
     ${l.status !== 'unreviewed' ? `<div class="okmsg">${l.status === 'excluded' ? 'Marked as not a business transaction.' : `Reviewed: ${ui.esc(l.allocation.splits.map((s) => catName(s.category_code)).join(', '))}${l.allocation.by ? ` (${ui.esc(l.allocation.by)})` : ''}.`}</div>` : ''}
-    ${sug && l.status === 'unreviewed' ? `<div class="suggest"><div><strong>${ui.esc(splits.length > 1 ? `${catName(splits[0].category_code)} + fee` : catName(sug.category_code))}</strong>${sug.member ? ` &middot; ${ui.esc((members.find((m) => m.id === normMember(sug.member)) || {}).name || sug.member)}` : ''}<div class="small">${ui.esc(sug.reason || '')}</div></div>
+    ${sug && l.status === 'unreviewed' ? `<div class="suggest"><div><strong>${ui.esc(splits.length > 1 ? splits.map((x) => catName(x.category_code)).join(' + ') : catName(sug.category_code))}</strong>${sug.member ? ` &middot; ${ui.esc((members.find((m) => m.id === normMember(sug.member)) || {}).name || sug.member)}` : ''}<div class="small">${ui.esc(sug.reason || '')}</div></div>
       <button type="button" class="primary" id="accept">Approve</button></div>` : ''}
 
     <form id="f" novalidate>

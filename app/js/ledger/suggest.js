@@ -143,6 +143,8 @@ export function computeSuggestions(lines, rules, accountsById) {
     } else if (transfers.has(l.id)) {
       const t = transfers.get(l.id);
       s = { category_code: t.category_code, member: null, reason: t.reason, transfer_pair_id: t.pair, fee_cents: t.fee_cents };
+    } else if (l.suggestion && l.suggestion.strong) {
+      s = l.suggestion; // the importer knows exactly what this is (a platform sale, fee or payout)
     } else {
       s = fromHistory(history, l) || (l.suggestion && !l.suggestion.rule_id && !l.suggestion.transfer_pair_id && !/^You chose/.test(l.suggestion.reason || '') ? l.suggestion : null);
     }

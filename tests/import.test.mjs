@@ -59,3 +59,34 @@ test('NFCU statement layout parses and checks running balances', () => {
   assert.match(a.lines[1].description, /Amazon\.Com\/MA WA$/);
   assert.equal(a.lines[2].description, 'Transfer To Checking Jane Q Owner');
 });
+
+import { shopifyRowsFromOrders } from '../app/js/import/shopify.js';
+import { stripeRowsFromApi } from '../app/js/import/stripe.js';
+
+test('shopify: sale + fee with tax split; manual orders kept aside and flagged', () => {
+  const m = (a) => ({ shopMoney: { amount: String(a) } });
+  const { rows, orders } = shopifyRowsFromOrders([
+    { name: '#1029', createdAt: '2026-04-25T15:00:38Z', sourceName: 'pos', displayFinancialStatus: 'PAID', totalPriceSet: m(10.75), subtotalPriceSet: m(10), totalTaxSet: m(0.75), totalShippingPriceSet: m(0),
+      transactions: [{ kind: 'SALE', status: 'SUCCESS', gateway: 'shopify_payments', processedAt: '2026-04-25T15:00:36Z', amountSet: m(10.75), fees: [{ amount: { amount: '0.38' } }] }] },
+    { name: '#1037', createdAt: '2026-08-06T03:08:22Z', sourceName: 'shopify_draft_order', displayFinancialStatus: 'PAID', totalPriceSet: m(130), subtotalPriceSet: m(130), totalTaxSet: m(0), totalShippingPriceSet: m(0),
+      shippingAddress: { provinceCode: 'FL' }, paymentGatewayNames: ['manual'], customer: { displayName: 'A Customer' },
+      transactions: [{ kind: 'SALE', status: 'SUCCESS', gateway: 'manual', processedAt: '2026-08-06T03:08:21Z', amountSet: m(130), fees: [] }] },
+  ]);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].amount_cents, 1075);
+  assert.deepEqual(rows[0].suggestion.splits, [{ category_code: '4010', amount_cents: 1000 }, { category_code: '2100', amount_cents: 75 }]);
+  assert.equal(rows[1].amount_cents, -38);
+  assert.equal(orders.length, 1);
+  assert.match(orders[0].flag, /no sales tax/);
+});
+
+test('stripe: sale and fee lines add up to net; payouts are transfers', () => {
+  const rows = stripeRowsFromApi([
+    { id: 'txn_1', type: 'payment', reporting_category: 'charge', amount: 5660, fee: 194, net: 5466, created: 1789999418, description: 'Payment for Invoice', status: 'available' },
+    { id: 'txn_2', type: 'payout', reporting_category: 'payout', amount: -5443, fee: 0, created: 1790554271, status: 'available', source: 'po_1' },
+    { id: 'txn_3', type: 'stripe_fee', reporting_category: 'fee', amount: -23, fee: 0, created: 1790009846, description: 'Invoicing', status: 'available' },
+  ]);
+  assert.equal(rows.reduce((t, r) => t + r.amount_cents, 0), 0);
+  assert.equal(rows[0].suggestion.category_code, '4030');
+  assert.equal(rows.find((r) => r.source_ref === 'txn_2').suggestion.category_code, '9030');
+});
