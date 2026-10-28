@@ -3,8 +3,9 @@ import * as db from './db.js';
 import * as sync from './sync.js';
 import { parseMoney, fmt, toInput, pct, splitTaxIncluded, summarizeEvent, DENOMINATIONS } from './money.js';
 import * as books from './books.js';
+import * as taxes from './taxes.js';
 
-const APP_VERSION = '0.3.0';
+const APP_VERSION = '0.4.0';
 const COMPANY = 'default'; // one company for now; multi-company comes with the ledger
 const SETTINGS_ID = 'settings:default';
 
@@ -111,6 +112,8 @@ const routes = [
   [/^#\/line\/([\w-]+)$/, (m, q) => books.lineView(m[1], q)],
   [/^#\/import$/, (m, q) => books.importView(q)],
   [/^#\/rules$/, () => books.rulesView()],
+  [/^#\/taxes$/, () => taxes.taxesHome()],
+  [/^#\/tax\/(\d{4}-Q[1-4])$/, (m, q) => taxes.periodView(m[1], q)],
 ];
 
 let currentIsForm = false;
@@ -159,9 +162,11 @@ async function homeView() {
   }
 
   const booksHtml = await books.accountsSection();
+  const taxHtml = await taxes.homeSection();
   $view.innerHTML = `
     <h1>${esc(settings.business_name || 'Shopbooks')}</h1>
     ${booksHtml}
+    ${taxHtml}
     <h2>Events</h2>
     <p class="sub">Markets, fairs and pop-ups. Log cash and card sales each day; the totals and sales tax add themselves up.</p>
     ${rows.length ? `<ul class="rows">${rows.join('')}</ul>` : `
@@ -579,10 +584,12 @@ async function settingsView() {
 
 // ---------- boot ----------
 
-books.init({
+const uiCtx = {
   esc, renderBar, setDock, go, $view, COMPANY, niceDate,
   setForm: (v) => { currentIsForm = v; },
-});
+};
+books.init(uiCtx);
+taxes.init(uiCtx);
 
 sync.onStatus((s) => {
   syncStatus = s;

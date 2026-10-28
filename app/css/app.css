@@ -210,3 +210,33 @@ h3.month { font-size: 15px; color: var(--ink-soft); font-weight: 650; margin: 22
 .sub-check { margin-left: 32px; }
 .rule-actions { display: flex; flex-direction: column; align-items: flex-end; }
 .rule-actions button { min-height: 36px; padding: 4px; font-size: 14px; }
+
+/* phase 3: sales tax */
+.tblwrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--radius-s); background: var(--sheet); }
+table.dr15, table.cmp { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 520px; }
+table.dr15 th, table.dr15 td, table.cmp th, table.cmp td { padding: 8px 10px; border-bottom: 1px solid var(--rule); text-align: left; }
+table.dr15 td.num, table.dr15 th.num, table.cmp .num { text-align: right; font-variation-settings: 'MONO' 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.dr15 thead th { font-size: 13px; color: var(--ink-soft); font-weight: 650; }
+table.dr15 tbody th { font-weight: 600; }
+table.cmp td.diff { color: var(--warn); font-weight: 700; }
+.worksheet { position: relative; margin: 8px 0; }
+.worksheet .ws-head { font-size: 14px; color: var(--ink-soft); margin-bottom: 8px; }
+.worksheet .wm { position: absolute; inset: 40px 0 auto 0; text-align: center; font-size: 30px; font-weight: 800; color: var(--warn); opacity: 0.12; transform: rotate(-8deg); pointer-events: none; letter-spacing: 0.04em; }
+ol.steps { padding-left: 22px; margin: 0 0 12px; }
+ol.steps li { margin-bottom: 12px; }
+ol.steps li div { color: var(--ink-soft); font-size: 15px; }
+li.titem .main select { margin-top: 8px; min-height: 40px; font-size: 14px; }
+li.titem.needs { background: var(--warn-bg); }
+.check-row { cursor: pointer; }
+.check-row input { width: 22px; height: 22px; min-height: 0; flex: none; }
+details > summary { padding: 10px 0; }
+
+@media print {
+  .bar, #dock, .actions, select, details:not([open]) { display: none !important; }
+  body { padding: 0; background: #fff; color: #000; }
+  main > *:not(.worksheet):not(h1) { display: none; }
+  main h1 { font-size: 18px; }
+  .worksheet { display: block !important; }
+  .worksheet .wm { opacity: 0.18; color: #999; }
+  .tblwrap { border: none; overflow: visible; }
+}
