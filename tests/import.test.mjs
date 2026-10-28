@@ -122,3 +122,16 @@ test('us bank statement: purchases, fee reversals (CR) and interest; balances ch
   assert.equal(r.rows[3].date, '2026-09-12');
   assert.equal(r.balanced, true);
 });
+
+import { parseCapitalOneStatement } from '../app/js/import/card-statements.js';
+
+test('capital one statement: payments, purchases, fees and interest balance', () => {
+  const text = ['Previous Balance $2,422.67', 'Payments - $133.00', 'New Balance = $2,865.17', 'Aug 21, 2026 - Sep 19, 2026 | 30 days in Billing Cycle',
+    'Sep 16 Sep 16 CAPITAL ONE MOBILE PYMT - $133.00', 'Aug 30 Aug 31 TEMU.COM 8884958368 MA $104.13', 'Sep 16 Sep 17 AMAZON MARK* 5R0H25CX2 SEATTLE WA $384.53',
+    'Sep 14 Sep 15 PAST DUE FEE $39.00', 'Interest Charge on Purchases $47.84', 'Interest Charge on Cash Advances $0.00'].join('\n');
+  const r = parseCapitalOneStatement(text);
+  assert.equal(r.rows.length, 5);
+  assert.equal(r.rows[0].amount_cents, 13300);
+  assert.equal(r.rows[4].date, '2026-09-19');
+  assert.equal(r.balanced, true);
+});

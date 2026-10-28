@@ -70,3 +70,33 @@ export function parseUsBankStatement(text) {
   const check = previous !== null && newBal !== null ? previous - rows.reduce((t, r) => t + r.amount_cents, 0) === newBal : null;
   return { issuer: 'U.S. Bank', closing_date: `${cy}-${cm}-${cd}`, previous_balance_cents: previous, new_balance_cents: newBal, balanced: check, rows };
 }
+
+// ---------- Capital One (plain text extraction) ----------
+const MON = { Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12' };
+export function parseCapitalOneStatement(text) {
+  const per = text.match(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{1,2}), (\d{4}) - (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{1,2}), (\d{4})/);
+  if (!per) throw new Error('Not a Capital One statement: no billing period.');
+  const [, sm, , sy, em, ed, ey] = per;
+  const yearFor = (m) => (sy !== ey && MON[m] >= MON[sm] ? sy : ey);
+  const closing = `${ey}-${MON[em]}-${ed.padStart(2, '0')}`;
+  const grab = (label) => {
+    const m = text.match(new RegExp(`${label}\\s*([+=\\-])?\\s*\\$([\\d,]+\\.\\d{2})`));
+    return m ? Math.round(Number(m[2].replace(/,/g, '')) * 100) * (m[1] === '-' ? -1 : 1) : null;
+  };
+  const previous = grab('Previous Balance');
+  const newBal = Math.abs(grab('New Balance =') ?? grab('New Balance'));
+  const rows = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const l = raw.trim();
+    let m = l.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{1,2}) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2} (.+?) (-\s*)?\$([\d,]+\.\d{2})$/);
+    if (m) {
+      const amt = Math.round(Number(m[5].replace(/,/g, '')) * 100);
+      rows.push({ date: `${yearFor(m[1])}-${MON[m[1]]}-${m[2].padStart(2, '0')}`, amount_cents: m[4] ? amt : -amt, description: m[3].trim() });
+      continue;
+    }
+    m = l.match(/^Interest Charge on (Purchases|Cash Advances|Other Balances) \$([\d,]+\.\d{2})$/);
+    if (m && m[2] !== '0.00') rows.push({ date: closing, amount_cents: -Math.round(Number(m[2].replace(/,/g, '')) * 100), description: `INTEREST CHARGE ON ${m[1].toUpperCase()}` });
+  }
+  const check = previous !== null && newBal !== null ? previous - rows.reduce((t, r) => t + r.amount_cents, 0) === newBal : null;
+  return { issuer: 'Capital One', closing_date: closing, previous_balance_cents: previous, new_balance_cents: newBal, balanced: check, rows };
+}
