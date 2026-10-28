@@ -4,7 +4,7 @@ import * as sync from './sync.js';
 import { parseMoney, fmt, toInput, pct, splitTaxIncluded, summarizeEvent, DENOMINATIONS } from './money.js';
 import * as books from './books.js';
 
-const APP_VERSION = '0.2.0';
+const APP_VERSION = '0.3.0';
 const COMPANY = 'default'; // one company for now; multi-company comes with the ledger
 const SETTINGS_ID = 'settings:default';
 
@@ -110,6 +110,7 @@ const routes = [
   [/^#\/account\/([\w-]+)$/, (m, q) => books.accountView(m[1], q)],
   [/^#\/line\/([\w-]+)$/, (m, q) => books.lineView(m[1], q)],
   [/^#\/import$/, (m, q) => books.importView(q)],
+  [/^#\/rules$/, () => books.rulesView()],
 ];
 
 let currentIsForm = false;
@@ -523,6 +524,9 @@ async function settingsView() {
       <form id="login" novalidate><div class="field"><label for="pc">Passcode</label><input id="pc" name="passcode" type="password" autocomplete="current-password"></div>
         <div id="lerr" class="err" role="alert"></div><div class="actions"><button type="submit">Turn on sync</button></div></form>`}
 
+    <h2>Books</h2>
+    <div class="actions"><a class="btn" href="#/rules">Rules</a><button type="button" id="refreshSug">Refresh suggestions</button><span class="small" id="sugMsg" role="status"></span></div>
+
     <h2>Your data</h2>
     <p class="small">${persisted ? 'This browser has agreed to keep your data even when storage runs low.' : 'Install the app to your home screen so your phone keeps this data safe.'}</p>
     <div class="actions"><button type="button" id="backup">Download a backup</button></div>
@@ -558,6 +562,12 @@ async function settingsView() {
   if (sn) sn.addEventListener('click', async () => { sn.disabled = true; await sync.syncNow(); if (location.hash.startsWith('#/settings')) settingsView(); });
   const so = document.getElementById('signOut');
   if (so) so.addEventListener('click', async () => { await sync.signOut(); settingsView(); });
+  document.getElementById('refreshSug').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    const r = await books.refreshSuggestions();
+    document.getElementById('sugMsg').textContent = `${r.updated} suggestion${r.updated === 1 ? '' : 's'} updated${r.autoApproved ? `, ${r.autoApproved} approved by rules` : ''}.`;
+    e.target.disabled = false;
+  });
   document.getElementById('backup').addEventListener('click', async () => {
     const all = await db.exportAll();
     const a = document.createElement('a');

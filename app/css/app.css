@@ -198,3 +198,15 @@ h3.month { font-size: 15px; color: var(--ink-soft); font-weight: 650; margin: 22
 .desc { font-size: 15px; color: var(--ink-soft); word-break: break-word; margin: 14px 0; }
 .check { display: flex; gap: 10px; align-items: flex-start; font-size: 15px; margin: 4px 0 12px; }
 .check input { width: 22px; height: 22px; min-height: 0; margin-top: 1px; flex: none; }
+
+/* phase 2: splits, matches, rules */
+.split.multi { border: 1px solid var(--rule); border-radius: var(--radius-l); padding: 12px; margin-bottom: 10px; background: var(--sheet); }
+.split.multi .field { margin-bottom: 10px; }
+.split-amt { display: flex; gap: 8px; align-items: center; }
+.split-amt .money-wrap { flex: 1; }
+.split-actions { justify-content: space-between; align-items: center; margin-top: 0; }
+.match { border-left: 4px solid var(--focus); background: var(--sheet); padding: 10px 12px; border-radius: 4px; margin: 12px 0; font-size: 15px; }
+.match a { color: var(--ink); }
+.sub-check { margin-left: 32px; }
+.rule-actions { display: flex; flex-direction: column; align-items: flex-end; }
+.rule-actions button { min-height: 36px; padding: 4px; font-size: 14px; }

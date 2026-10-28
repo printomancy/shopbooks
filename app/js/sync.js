@@ -25,11 +25,15 @@ export async function init() {
   db.onChange(async (d) => {
     if (d.local) {
       setStatus({ pending: (await db.outbox()).length });
-      schedule(1500);
+      schedule(400);
     }
   });
   window.addEventListener('online', () => schedule(200));
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') schedule(200); });
+  document.addEventListener('visibilitychange', () => {
+    // Push right away when the app is hidden (switching apps, locking the phone).
+    if (document.visibilityState === 'hidden') syncNow().catch(() => {});
+    else schedule(200);
+  });
   setInterval(() => { if (document.visibilityState === 'visible') schedule(0); }, 60000);
   schedule(300);
 }

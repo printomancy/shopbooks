@@ -1,6 +1,7 @@
 // Books: accounts, account registers, reviewing lines, and CSV import.
 import * as db from './db.js';
-import { fmt } from './money.js';
+import { fmt, parseMoney, toInput } from './money.js';
+import { computeSuggestions, payeeKey } from './ledger/suggest.js';
 import { DEFAULT_CATEGORIES, GROUP_LABELS, ACCOUNT_KINDS } from './ledger/chart.js';
 import { parseCsv, guessMapping, rowsFromCsv } from './import/csv.js';
 import { buildStatementLines } from './import/common.js';
@@ -148,6 +149,36 @@ function lineRow(l, filter) {
     <div class="amt ${l.amount_cents > 0 ? 'in' : ''}">${fmt(l.amount_cents)}</div><span class="chev" aria-hidden="true">&rsaquo;</span></a></li>`;
 }
 
+// ---------- suggestions: rules, transfers, history ----------
+
+async function rulesList() {
+  return (await db.list('rule', { companyId: ui.COMPANY })).map((r) => ({ id: r.id, ...r.data }));
+}
+
+// Recompute suggestions for every unreviewed line; auto rules approve directly.
+export async function refreshSuggestions() {
+  const [recs, rules, accts] = await Promise.all([db.list('statement_line', { companyId: ui.COMPANY }), rulesList(), accounts()]);
+  const lines = recs.map((r) => ({ id: r.id, ...r.data }));
+  const byId = new Map(recs.map((r) => [r.id, r]));
+  const changes = computeSuggestions(lines, rules, Object.fromEntries(accts.map((a) => [a.id, a])));
+  const writes = [];
+  let autoApproved = 0;
+  for (const c of changes) {
+    const rec = byId.get(c.id);
+    const data = { ...rec.data, suggestion: c.suggestion };
+    if (c.auto && c.suggestion) {
+      data.status = 'reviewed';
+      data.allocation = { splits: [{ category_code: c.suggestion.category_code, amount_cents: data.amount_cents, member: c.suggestion.member ? normMember(c.suggestion.member) : null }], memo: '', reviewed_at: new Date().toISOString(), by: c.suggestion.reason };
+      autoApproved++;
+    }
+    writes.push({ id: rec.id, type: rec.type, company_id: rec.company_id, data });
+  }
+  if (writes.length) await db.saveMany(writes);
+  return { updated: writes.length, autoApproved };
+}
+
+const normMember = (m) => (m && !m.startsWith('member_') ? `member_${m}` : m);
+
 // ---------- one line: review ----------
 
 function categoryOptions(selected) {
@@ -163,14 +194,29 @@ export async function lineView(id, query) {
   if (!rec || rec.deleted) return ui.go('#/');
   const l = { id, ...rec.data };
   const accts = await accounts();
-  const acct = accts.find((a) => a.id === l.account_id) || { name: 'Account' };
+  const acctById = Object.fromEntries(accts.map((a) => [a.id, a]));
+  const acct = acctById[l.account_id] || { name: 'Account' };
   const flow = query.get('flow');
   const members = (await db.list('member', { companyId: ui.COMPANY })).map((m) => ({ id: m.id, ...m.data }));
   const sug = l.suggestion;
-  const current = l.allocation ? l.allocation.splits[0] : sug ? { category_code: sug.category_code, member: sug.member ? `member_${sug.member}` : null } : {};
+  const pairRec = sug && sug.transfer_pair_id ? await db.get(sug.transfer_pair_id) : (l.transfer_pair_id ? await db.get(l.transfer_pair_id) : null);
+  const pair = pairRec && !pairRec.deleted ? { id: pairRec.id, ...pairRec.data } : null;
   const back = flow ? `#/account/${flow}?show=review` : `#/account/${l.account_id}?show=all`;
 
+  // Starting splits: what was saved, else the suggestion, else one empty row.
+  let splits = l.allocation ? l.allocation.splits.map((s) => ({ ...s }))
+    : sug ? [{ category_code: sug.category_code, amount_cents: l.amount_cents, member: normMember(sug.member) }]
+    : [{ category_code: '', amount_cents: l.amount_cents, member: null }];
+  // A transfer that lost a fee on the way: split the fee out on the sending side.
+  if (!l.allocation && sug && sug.transfer_pair_id && sug.fee_cents > 0 && l.amount_cents < 0) {
+    splits = [
+      { category_code: sug.category_code, amount_cents: l.amount_cents + sug.fee_cents, member: null },
+      { category_code: acct.kind === 'platform' ? '6040' : '6140', amount_cents: -sug.fee_cents, member: null },
+    ];
+  }
+
   ui.renderBar({ title: payeeOf(l.description), back });
+  const pk = payeeKey(l.description);
   ui.$view.innerHTML = `
     <section class="tape" aria-label="Transaction">
       <div class="big ${l.amount_cents > 0 ? 'in' : ''}">${fmt(l.amount_cents)}</div>
@@ -180,17 +226,19 @@ export async function lineView(id, query) {
       <div class="line muted"><span class="k">From</span><span class="lead"></span><span class="v">${ui.esc(SOURCE_LABEL[l.source] || l.source)}</span></div>
     </section>
     <p class="desc">${ui.esc(l.description)}</p>
+    ${pair ? `<div class="match"><strong>Matched transfer</strong><div>${fmt(pair.amount_cents)} ${pair.amount_cents > 0 ? 'into' : 'out of'} ${ui.esc(acctById[pair.account_id]?.name || 'another account')} on ${ui.esc(ui.niceDate(pair.date))}</div>
+      <div class="small">${ui.esc(pair.description)}</div><a class="small" href="#/line/${pair.id}">Open the other side</a></div>` : ''}
 
-    ${l.status !== 'unreviewed' ? `<div class="okmsg">${l.status === 'excluded' ? 'Marked as not a business transaction.' : `Reviewed: ${ui.esc(l.allocation.splits.map((s) => catName(s.category_code)).join(', '))}.`}</div>` : ''}
-    ${sug && l.status === 'unreviewed' ? `<div class="suggest"><div><strong>${ui.esc(catName(sug.category_code))}</strong>${sug.member ? ` &middot; ${ui.esc(sug.member === 'alec' ? 'Alec' : sug.member === 'gwen' ? 'Gwen' : sug.member)}` : ''}<div class="small">${ui.esc(sug.reason || '')}</div></div>
+    ${l.status !== 'unreviewed' ? `<div class="okmsg">${l.status === 'excluded' ? 'Marked as not a business transaction.' : `Reviewed: ${ui.esc(l.allocation.splits.map((s) => catName(s.category_code)).join(', '))}${l.allocation.by ? ` (${ui.esc(l.allocation.by)})` : ''}.`}</div>` : ''}
+    ${sug && l.status === 'unreviewed' ? `<div class="suggest"><div><strong>${ui.esc(splits.length > 1 ? `${catName(splits[0].category_code)} + fee` : catName(sug.category_code))}</strong>${sug.member ? ` &middot; ${ui.esc((members.find((m) => m.id === normMember(sug.member)) || {}).name || sug.member)}` : ''}<div class="small">${ui.esc(sug.reason || '')}</div></div>
       <button type="button" class="primary" id="accept">Approve</button></div>` : ''}
 
     <form id="f" novalidate>
-      <div class="field"><label for="cat">Category</label><select id="cat" name="cat">${categoryOptions(current.category_code)}</select>
-        <div class="hint" id="catNote"></div></div>
-      <div class="field" id="memberField" hidden><label for="mem">Member</label>
-        <select id="mem" name="member"><option value="">Choose who</option>${members.map((m) => `<option value="${m.id}" ${current.member === m.id ? 'selected' : ''}>${ui.esc(m.name)}</option>`).join('')}</select></div>
+      <div id="splits"></div>
+      <div class="actions split-actions"><button type="button" class="quiet" id="addSplit">Split into another category</button><span class="small" id="remain" role="status"></span></div>
       <div class="field"><label for="memo">Note</label><input id="memo" name="memo" value="${ui.esc(l.allocation?.memo || '')}" placeholder="Optional"></div>
+      ${pk ? `<label class="check"><input type="checkbox" id="mkrule"> Always use this category for &ldquo;${ui.esc(pk)}&rdquo;</label>
+      <label class="check sub-check" id="autoWrap" hidden><input type="checkbox" id="mkauto"> Approve these automatically, without asking</label>` : ''}
       <div id="err" class="err" role="alert"></div>
       <div class="actions">
         ${l.status === 'unreviewed' ? `<button type="button" class="quiet" id="exclude">Not a business transaction</button>` : `<button type="button" class="quiet" id="reopen">Move back to review</button>`}
@@ -199,13 +247,54 @@ export async function lineView(id, query) {
   ui.setDock(`<a class="btn" href="${back}">Back</a><button class="primary" form="f" type="submit">${flow ? 'Save and next' : 'Save'}</button>`);
 
   const f = document.getElementById('f');
-  const sync = () => {
-    const c = CATS.get(f.elements.cat.value);
-    document.getElementById('memberField').hidden = !(c && c.member);
-    document.getElementById('catNote').textContent = c && c.note ? c.note : '';
-  };
-  f.elements.cat.addEventListener('change', sync);
-  sync();
+  const box = document.getElementById('splits');
+  const memberSelect = (i, sel) => `<select data-i="${i}" data-f="member" aria-label="Member"><option value="">Which member?</option>${members.map((m) => `<option value="${m.id}" ${sel === m.id ? 'selected' : ''}>${ui.esc(m.name)}</option>`).join('')}</select>`;
+  function drawSplits() {
+    const multi = splits.length > 1;
+    box.innerHTML = splits.map((s, i) => {
+      const c = CATS.get(s.category_code);
+      return `<div class="split ${multi ? 'multi' : ''}">
+        <div class="field"><label for="cat${i}">${multi ? `Category ${i + 1}` : 'Category'}</label><select id="cat${i}" data-i="${i}" data-f="category_code">${categoryOptions(s.category_code)}</select>
+          ${c && c.note ? `<div class="hint">${ui.esc(c.note)}</div>` : ''}</div>
+        ${c && c.member ? `<div class="field">${memberSelect(i, s.member)}</div>` : ''}
+        ${multi ? `<div class="split-amt"><div class="money-wrap"><input class="money" inputmode="decimal" data-i="${i}" data-f="amount" value="${ui.esc(toInput(Math.abs(s.amount_cents)))}" aria-label="Amount for category ${i + 1}"></div>
+          <button type="button" class="quiet" data-rm="${i}" aria-label="Remove this split">Remove</button></div>` : ''}
+      </div>`;
+    }).join('');
+    updateRemain();
+  }
+  const sign = l.amount_cents < 0 ? -1 : 1;
+  function updateRemain() {
+    const used = splits.reduce((t, s) => t + Math.abs(s.amount_cents || 0), 0);
+    const left = Math.abs(l.amount_cents) - used;
+    document.getElementById('remain').textContent = splits.length > 1 ? (left === 0 ? 'Splits add up.' : left > 0 ? `${fmt(left)} not assigned yet` : `${fmt(-left)} more than the total`) : '';
+  }
+  box.addEventListener('change', (e) => {
+    const i = Number(e.target.dataset.i), fld = e.target.dataset.f;
+    if (fld === 'category_code') { splits[i].category_code = e.target.value; if (!CATS.get(e.target.value)?.member) splits[i].member = null; drawSplits(); }
+    if (fld === 'member') splits[i].member = e.target.value || null;
+  });
+  box.addEventListener('input', (e) => {
+    if (e.target.dataset.f !== 'amount') return;
+    const v = parseMoney(e.target.value);
+    splits[Number(e.target.dataset.i)].amount_cents = Number.isNaN(v) || v === null ? 0 : sign * Math.abs(v);
+    updateRemain();
+  });
+  box.addEventListener('click', (e) => {
+    const rm = e.target.dataset.rm;
+    if (rm === undefined) return;
+    splits.splice(Number(rm), 1);
+    if (splits.length === 1) splits[0].amount_cents = l.amount_cents;
+    drawSplits();
+  });
+  document.getElementById('addSplit').addEventListener('click', () => {
+    const used = splits.reduce((t, s) => t + Math.abs(s.amount_cents || 0), 0);
+    splits.push({ category_code: '', amount_cents: sign * Math.max(0, Math.abs(l.amount_cents) - used), member: null });
+    drawSplits();
+  });
+  drawSplits();
+  const mk = document.getElementById('mkrule');
+  if (mk) mk.addEventListener('change', () => { document.getElementById('autoWrap').hidden = !mk.checked; });
 
   const next = async () => {
     if (!flow) return ui.go(back);
@@ -213,19 +302,44 @@ export async function lineView(id, query) {
     const after = lines.find((x) => byDate(x, l) > 0) || lines[0];
     ui.go(after ? `#/line/${after.id}?flow=${flow}` : back);
   };
-  const save = async (code, member, memo) => {
-    const c = CATS.get(code);
-    if (!c) { document.getElementById('err').textContent = 'Choose a category.'; return; }
-    if (c.member && !member) { document.getElementById('err').textContent = 'Choose which member this was.'; return; }
+  const err = (m) => { document.getElementById('err').textContent = m; };
+
+  async function save(finalSplits) {
+    for (const s of finalSplits) {
+      const c = CATS.get(s.category_code);
+      if (!c) return err('Choose a category for every split.');
+      if (c.member && !s.member) return err('Choose which member this was.');
+    }
+    const total = finalSplits.reduce((t, s) => t + s.amount_cents, 0);
+    if (total !== l.amount_cents) return err(`The splits add up to ${fmt(total)}, but the transaction is ${fmt(l.amount_cents)}.`);
+    const memo = f.elements.memo.value.trim();
+    const pairId = pair && finalSplits.every((s) => /^90/.test(s.category_code) || ['6040', '6140'].includes(s.category_code)) ? pair.id : null;
     await db.save({ id, type: 'statement_line', company_id: rec.company_id, data: {
-      ...rec.data, status: 'reviewed',
-      allocation: { splits: [{ category_code: code, amount_cents: l.amount_cents, member: member || null }], memo: memo || '', reviewed_at: new Date().toISOString() },
+      ...rec.data, status: 'reviewed', transfer_pair_id: pairId || rec.data.transfer_pair_id || null,
+      allocation: { splits: finalSplits, memo, reviewed_at: new Date().toISOString() },
     } });
+    // Approve the other side of a matched transfer at the same time.
+    if (pairId && pairRec.data.status === 'unreviewed') {
+      await db.save({ id: pairRec.id, type: pairRec.type, company_id: pairRec.company_id, data: {
+        ...pairRec.data, status: 'reviewed', transfer_pair_id: id,
+        allocation: { splits: [{ category_code: finalSplits[0].category_code, amount_cents: pairRec.data.amount_cents, member: null }], memo: 'Other side of a matched transfer', reviewed_at: new Date().toISOString() },
+      } });
+    }
+    if (mk && mk.checked && finalSplits.length === 1) {
+      await db.save({ type: 'rule', company_id: rec.company_id, data: {
+        name: `${pk} → ${catName(finalSplits[0].category_code)}`,
+        match: { text: pk, direction: l.amount_cents > 0 ? 'in' : 'out' },
+        action: { category_code: finalSplits[0].category_code, member: finalSplits[0].member || null },
+        auto: document.getElementById('mkauto').checked, created_at: new Date().toISOString(),
+      } });
+      await refreshSuggestions();
+    }
     next();
-  };
-  f.addEventListener('submit', (e) => { e.preventDefault(); save(f.elements.cat.value, f.elements.member.value, f.elements.memo.value.trim()); });
+  }
+
+  f.addEventListener('submit', (e) => { e.preventDefault(); save(splits.map((s) => ({ ...s, amount_cents: splits.length === 1 ? l.amount_cents : s.amount_cents }))); });
   const acc = document.getElementById('accept');
-  if (acc) acc.addEventListener('click', () => save(sug.category_code, sug.member ? `member_${sug.member}` : f.elements.member.value, f.elements.memo.value.trim()));
+  if (acc) acc.addEventListener('click', () => save(splits.map((s) => ({ ...s, amount_cents: splits.length === 1 ? l.amount_cents : s.amount_cents }))));
   const ex = document.getElementById('exclude');
   if (ex) ex.addEventListener('click', async () => {
     await db.save({ id, type: 'statement_line', company_id: rec.company_id, data: { ...rec.data, status: 'excluded', allocation: null } });
@@ -233,9 +347,42 @@ export async function lineView(id, query) {
   });
   const ro = document.getElementById('reopen');
   if (ro) ro.addEventListener('click', async () => {
-    await db.save({ id, type: 'statement_line', company_id: rec.company_id, data: { ...rec.data, status: 'unreviewed', allocation: null } });
+    await db.save({ id, type: 'statement_line', company_id: rec.company_id, data: { ...rec.data, status: 'unreviewed', allocation: null, transfer_pair_id: null } });
     lineView(id, query);
   });
+}
+
+// ---------- rules ----------
+
+export async function rulesView() {
+  ui.setForm(false);
+  const rules = (await rulesList()).sort((a, b) => a.name.localeCompare(b.name));
+  ui.renderBar({ title: 'Rules', back: '#/settings' });
+  ui.$view.innerHTML = `
+    <h1>Rules</h1>
+    <p class="sub">A rule fills in the category when a transaction's description contains certain words. Make one from any transaction with &ldquo;Always use this category&rdquo;. Rules that approve automatically skip the review list.</p>
+    ${rules.length ? `<ul class="rows">${rules.map((r) => `<li><div class="row">
+      <div class="main"><div class="name">${ui.esc(r.name)}</div>
+        <div class="meta">Contains &ldquo;${ui.esc(r.match.text || '')}&rdquo; &middot; money ${r.match.direction === 'in' ? 'in' : r.match.direction === 'out' ? 'out' : 'in or out'} &middot; ${r.disabled ? 'Off' : r.auto ? 'Approves automatically' : 'Suggests'}</div></div>
+      <div class="rule-actions">
+        <button type="button" class="quiet" data-act="mode" data-id="${r.id}">${r.auto ? 'Only suggest' : 'Auto-approve'}</button>
+        <button type="button" class="quiet" data-act="del" data-id="${r.id}">Delete</button>
+      </div></div></li>`).join('')}</ul>` : `<div class="empty"><strong>No rules yet</strong>Open any transaction and tick &ldquo;Always use this category&rdquo; to make one.</div>`}`;
+  ui.setDock('');
+  ui.$view.addEventListener('click', async (e) => {
+    const b = e.target.closest('button[data-act]');
+    if (!b) return;
+    const r = rules.find((x) => x.id === b.dataset.id);
+    if (b.dataset.act === 'del') {
+      if (!confirm(`Delete the rule "${r.name}"?`)) return;
+      await db.remove(r.id);
+    } else {
+      const { id: rid, ...data } = r;
+      await db.save({ id: rid, type: 'rule', company_id: ui.COMPANY, data: { ...data, auto: !r.auto } });
+    }
+    await refreshSuggestions();
+    rulesView();
+  }, { once: true });
 }
 
 // ---------- CSV import ----------
@@ -306,6 +453,7 @@ export async function importView(query) {
         goBtn.disabled = true;
         const n = await db.saveMany(pending);
         await db.save({ id: importId, type: 'import', company_id: ui.COMPANY, data: { file: fileName, account_id: accountId, lines: n, imported_at: new Date().toISOString(), mapping: read() } });
+        await refreshSuggestions();
         ui.go(`#/account/${accountId}?show=review`);
       });
     };
