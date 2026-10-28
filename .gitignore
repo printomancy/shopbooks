@@ -1,0 +1,12 @@
+node_modules/
+.wrangler/
+.dev.vars
+wrangler.jsonc
+wrangler.toml
+*.log
+.DS_Store
+# Never commit real financial data
+data/
+inbox/
+*.qfx
+*.ofx

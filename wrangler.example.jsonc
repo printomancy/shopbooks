@@ -1,0 +1,23 @@
+// Copy this file to wrangler.jsonc and fill in your own database_id.
+// wrangler.jsonc is git-ignored so your account details never land in the public repo.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "shopbooks",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-06-01",
+  "assets": {
+    "directory": "./app",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "shopbooks",
+      "database_id": "REPLACE_WITH_YOUR_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "observability": { "enabled": true }
+}
