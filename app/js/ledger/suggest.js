@@ -73,11 +73,12 @@ export function fromHistory(history, line) {
 // ---------- transfers between the user's own accounts ----------
 
 // Wording that marks money moving between accounts (not a sale or a fee).
-const TRANSFER_WORDS = /\btransfer\b|\bxfer\b|payout|withdraw|payment thank you|thank you for your payment|autopay|epayment|online pmt|\bpmt\b|paid from (paypal|etsy|whatnot|stripe|square|shopify)|paid to - paypal|money transfer|transfer from shares|transfer to shares|credit card payment/i;
+const TRANSFER_WORDS = /\btransfer\b|\bxfer\b|payout|withdraw|payment thank you|thank you for your payment|autopay|epayment|online pmt|\bpmt\b|paid from (paypal|etsy|whatnot|stripe|square|shopify)|paid to - paypal|money transfer|transfer from shares|transfer to shares|credit card payment|cash box deposit|^deposit \d{2}-\d{2}-\d{2}/i;
 const NOT_TRANSFER = /sale of goods|\bfee\b|fees and|refund|shipping label|purchase|pos debit|transfer (to|from) checking\s+[a-z]+/i;
 
 function transferCode(a, b, accountsById) {
   const kinds = [accountsById[a.account_id]?.kind, accountsById[b.account_id]?.kind];
+  if (kinds.includes('cash')) return '9020';
   if (kinds.some((k) => k === 'credit_card' || k === 'line_of_credit' || k === 'personal_card')) return '9010';
   if (kinds.includes('platform')) return '9030';
   return '9000';
@@ -88,7 +89,8 @@ function transferCode(a, b, accountsById) {
 export function findTransfers(lines, accountsById, { days = 5, feeShare = 0.03, maxFee = 1500 } = {}) {
   const open = lines.filter((l) => l.status === 'unreviewed' && !l.transfer_pair_id);
   const others = lines.filter((l) => !l.transfer_pair_id && (l.status === 'unreviewed' || isTransferAlloc(l)));
-  const outs = open.filter((l) => l.amount_cents < 0);
+  // An outflow already approved as a transfer (e.g. a cash-box deposit) can still pair with an unreviewed inflow.
+  const outs = others.filter((l) => l.amount_cents < 0);
   const used = new Set();
   const result = new Map();
   const dn = (iso) => Date.parse(iso) / 864e5;

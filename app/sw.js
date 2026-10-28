@@ -1,6 +1,6 @@
 // Service worker: caches the app so it opens with no connection.
 // Bump VERSION whenever app files change so devices pick up the new build.
-const VERSION = 'shopbooks-v0.4.0';
+const VERSION = 'shopbooks-v0.5.0';
 const SHELL = [
   '/',
   '/index.html',
@@ -15,6 +15,7 @@ const SHELL = [
   '/js/tax/fl-dr15.js',
   '/js/ledger/chart.js',
   '/js/ledger/suggest.js',
+  '/js/ledger/events.js',
   '/js/import/csv.js',
   '/js/import/common.js',
   '/js/import/nfcu-statement.js',

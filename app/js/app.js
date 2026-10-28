@@ -4,8 +4,9 @@ import * as sync from './sync.js';
 import { parseMoney, fmt, toInput, pct, splitTaxIncluded, summarizeEvent, DENOMINATIONS } from './money.js';
 import * as books from './books.js';
 import * as taxes from './taxes.js';
+import { eventLines, cardCheck } from './ledger/events.js';
 
-const APP_VERSION = '0.4.0';
+const APP_VERSION = '0.5.0';
 const COMPANY = 'default'; // one company for now; multi-company comes with the ledger
 const SETTINGS_ID = 'settings:default';
 
@@ -72,6 +73,39 @@ async function eventChildren(eventId) {
     days: days.filter((d) => d.data.event_id === eventId).map((d) => ({ id: d.id, ...d.data })),
     deposits: deps.filter((d) => d.data.event_id === eventId).map((d) => ({ id: d.id, ...d.data })).sort((a, b) => (a.date || '').localeCompare(b.date || '')),
   };
+}
+
+// ---------- event -> books ----------
+
+async function cashAccountId() {
+  const accts = await db.list('account', { companyId: COMPANY });
+  const cash = accts.find((a) => a.data.kind === 'cash' && a.data.active !== false);
+  if (cash) return cash.id;
+  const rec = await db.save({ id: 'acct_cash', type: 'account', company_id: COMPANY, data: { name: 'Cash box', kind: 'cash', institution: '', mask: '', active: true } });
+  return rec.id;
+}
+
+// Bring the books in line with the event log: add/update derived lines, remove stale ones.
+async function postEvent(eventId) {
+  const all = await db.list('statement_line', { companyId: COMPANY });
+  const existing = all.filter((l) => l.data.event && l.data.event.event_id === eventId);
+  const e = await getEvent(eventId);
+  if (!e) { for (const l of existing) await db.remove(l.id); return; }
+  const { days, deposits } = await eventChildren(eventId);
+  const want = eventLines({ event: e, days, deposits, cashAccountId: await cashAccountId(), companyId: COMPANY });
+  const byId = new Map(existing.map((l) => [l.id, l]));
+  const writes = [];
+  for (const w of want) {
+    const cur = byId.get(w.id);
+    // Keep the category you chose for cash paid out or the float, as long as the amount hasn't changed.
+    if (cur && cur.data.status !== 'unreviewed' && (w.data.status === 'unreviewed' || w.id.endsWith('_float')) && cur.data.amount_cents === w.data.amount_cents) {
+      w.data = { ...w.data, status: cur.data.status, allocation: cur.data.allocation, suggestion: cur.data.suggestion };
+    }
+    writes.push(w);
+  }
+  if (writes.length) await db.saveMany(writes);
+  const keep = new Set(want.map((w) => w.id));
+  for (const l of existing) if (!keep.has(l.id)) await db.remove(l.id);
 }
 
 // ---------- chrome ----------
@@ -227,6 +261,7 @@ async function eventFormView(id) {
         state_rate_bp: bpFromPct(fd.get('state_rate')), surtax_bp: bpFromPct(fd.get('surtax')),
         opening_float_cents: flt, booth_fee_cents: booth, notes: String(fd.get('notes')) },
     });
+    await postEvent(rec.id);
     go(`#/event/${rec.id}`);
   });
   const del = document.getElementById('del');
@@ -235,6 +270,7 @@ async function eventFormView(id) {
     if (!confirm(`Delete ${e.name}${days.length ? ` and its ${days.length} logged day${days.length > 1 ? 's' : ''}` : ''}? This can't be undone.`)) return;
     for (const d of [...days, ...deposits]) await db.remove(d.id);
     await db.remove(id);
+    await postEvent(id); // removes the cash-box lines this event added
     go('#/');
   });
 }
@@ -249,6 +285,16 @@ async function eventView(id) {
   renderBar({ title: e.name, back: '#/' });
 
   const t = s.totals, c = s.cash;
+  const [lineRecs, acctRecs] = await Promise.all([db.list('statement_line', { companyId: COMPANY }), db.list('account', { companyId: COMPANY })]);
+  const allLines = lineRecs.map((r) => ({ id: r.id, ...r.data }));
+  const posted = allLines.filter((l) => l.event && l.event.event_id === id);
+  const postedCash = posted.filter((l) => l.allocation && l.allocation.splits.some((x) => x.category_code === '4000')).reduce((x, l) => x + l.amount_cents, 0);
+  const paidOutToReview = posted.filter((l) => l.status === 'unreviewed').length;
+  const pp = cardCheck({ event: e, days, lines: allLines, accountsById: Object.fromEntries(acctRecs.map((a) => [a.id, a.data])) });
+  const ppNote = !pp.logged && !pp.inBooks ? 'No PayPal sales logged or in the PayPal account yet.'
+    : !pp.inBooks ? `You logged ${fmt(pp.logged)} in PayPal sales. They'll show here once PayPal activity for these dates is imported.`
+    : Math.abs(pp.difference) <= 100 ? `PayPal account shows ${fmt(pp.inBooks)} for these dates, matching what you logged.`
+    : `PayPal account shows ${fmt(pp.inBooks)} for these dates; you logged ${fmt(pp.logged)} (${pp.difference > 0 ? 'more' : 'less'} by ${fmt(Math.abs(pp.difference))}). Check for a missed day or a refund.`;
   const dayRows = s.days.map((d) => `<li><a href="#/event/${id}/day/${d.id}">
       <div class="main"><div class="name">${esc(niceDate(d.date, { weekday: true }))}</div>
         <div class="meta">${d.cashSales === null ? '<span class="tag">Cash not counted</span>' : `Cash ${fmt(d.cashSales)} &middot; Card ${fmt(d.card)}`}</div></div>
@@ -287,6 +333,13 @@ async function eventView(id) {
     ${c.deposited ? `<p class="small">Of the deposits, ${fmt(c.floatPortionOfDeposits)} is your float coming back (not income) and ${fmt(c.salesPortionOfDeposits)} is cash sales.</p>` : ''}
     ${depRows ? `<ul class="rows">${depRows}</ul>` : ''}
     <div class="actions"><a class="btn" href="#/event/${id}/deposit/new">Record a deposit</a></div>
+
+    <h2>In your books</h2>
+    <section class="tape" aria-label="Posted to the books">
+      <div class="line"><span class="k">Cash sales posted to the Cash box</span><span class="lead"></span><span class="v">${fmt(postedCash)}</span></div>
+      <div class="line muted"><span class="k">Sales tax inside them (on your DR-15)</span><span class="lead"></span><span class="v">${fmt(postedCash - Math.round((postedCash * 10000) / (10000 + s.rateBp)))}</span></div>
+    </section>
+    <p class="small">${esc(ppNote)}${paidOutToReview ? ` ${paidOutToReview} cash payout${paidOutToReview > 1 ? 's' : ''} from the box need${paidOutToReview > 1 ? '' : 's'} a category in <a href="#/account/acct_cash?show=review">Cash box</a>.` : ''}</p>
 
     <div class="actions">
       <button type="button" class="quiet" id="csv">Download as spreadsheet (CSV)</button>
@@ -443,12 +496,14 @@ async function dayFormView(eventId, dayId) {
         paypal_cents: nums.paypal, other_card_cents: nums.other, cash_paid_out_cents: nums.paidout,
         paid_out_note: f.elements.paid_out_note.value.trim(), cash_removed_cents: nums.removed, counts, notes: f.elements.notes.value },
     });
+    await postEvent(eventId);
     go(`#/event/${eventId}`);
   });
   const del = document.getElementById('del');
   if (del) del.addEventListener('click', async () => {
     if (!confirm(`Delete ${niceDate(existing.date, { weekday: true })}? This can't be undone.`)) return;
     await db.remove(dayId);
+    await postEvent(eventId);
     go(`#/event/${eventId}`);
   });
 }
@@ -491,12 +546,14 @@ async function depositFormView(eventId, depId) {
       id: depId || undefined, type: 'event_deposit', company_id: COMPANY,
       data: { event_id: eventId, date: f.elements.date.value, amount_cents: amount, account: f.elements.account.value.trim(), note: f.elements.note.value.trim() },
     });
+    await postEvent(eventId);
     go(`#/event/${eventId}`);
   });
   const del = document.getElementById('del');
   if (del) del.addEventListener('click', async () => {
     if (!confirm('Delete this deposit?')) return;
     await db.remove(depId);
+    await postEvent(eventId);
     go(`#/event/${eventId}`);
   });
 }

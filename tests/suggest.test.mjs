@@ -67,3 +67,15 @@ test('rules beat transfers beat history; auto rules are flagged', () => {
   assert.equal(w.auto, true);
   assert.ok(!out.find((o) => o.id === 'x')); // import suggestion kept, nothing to change
 });
+
+test('a cash-box deposit (already approved) pairs with the bank cash deposit', () => {
+  const accts2 = { ...accts, cash: { id: 'cash', name: 'Cash box', kind: 'cash' } };
+  const lines = [
+    { id: 'box', account_id: 'cash', date: '2026-11-16', amount_cents: -84000, description: 'Jacksonville Fair: cash box deposit to Business checking', status: 'reviewed', allocation: { splits: [{ category_code: '9020', amount_cents: -84000 }] } },
+    { id: 'bank', account_id: 'chk', date: '2026-11-17', amount_cents: 84000, description: 'Deposit 11-16-26 Fa5E Fleming Island FL', status: 'unreviewed' },
+  ];
+  const t = findTransfers(lines, accts2);
+  assert.equal(t.get('bank').pair, 'box');
+  assert.equal(t.get('bank').category_code, '9020');
+  assert.ok(!t.has('box')); // already reviewed: left alone
+});
