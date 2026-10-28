@@ -181,3 +181,20 @@ details summary { cursor: pointer; font-weight: 650; padding: 8px 0; }
   .tape .big { animation: settle 360ms ease-out; }
   @keyframes settle { from { transform: translateY(4px); } to { transform: none; } }
 }
+
+/* books */
+h3.month { font-size: 15px; color: var(--ink-soft); font-weight: 650; margin: 22px 0 6px; }
+.amt.in, .big.in { color: var(--go); }
+.chip { display: inline-block; font-size: 13px; padding: 1px 8px; border-radius: 999px; background: var(--mint); color: var(--ink); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.chip.done { background: transparent; border: 1px solid var(--go); color: var(--go); }
+.chip.warn { background: var(--warn-bg); color: var(--warn); }
+.chip.quiet { background: transparent; border: 1px solid var(--rule); color: var(--ink-soft); }
+.filters { display: flex; flex-direction: column; gap: 10px; margin: 20px 0 4px; }
+.seg { display: flex; border: 1.5px solid var(--ink); border-radius: var(--radius-s); overflow: hidden; }
+.seg a { flex: 1; text-align: center; padding: 10px 8px; text-decoration: none; color: var(--ink); font-weight: 650; font-size: 15px; }
+.seg a[aria-selected='true'] { background: var(--ink); color: var(--paper); }
+.suggest { display: flex; gap: 12px; align-items: center; justify-content: space-between; border: 1.5px solid var(--go); border-radius: var(--radius-l); padding: 12px 14px; margin: 12px 0 20px; }
+.suggest .small { margin-top: 2px; }
+.desc { font-size: 15px; color: var(--ink-soft); word-break: break-word; margin: 14px 0; }
+.check { display: flex; gap: 10px; align-items: flex-start; font-size: 15px; margin: 4px 0 12px; }
+.check input { width: 22px; height: 22px; min-height: 0; margin-top: 1px; flex: none; }

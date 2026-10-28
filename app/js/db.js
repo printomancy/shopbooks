@@ -85,6 +85,29 @@ export async function save({ id, type, company_id, data }) {
   return rec;
 }
 
+// Save many records in one transaction (imports). Skips records whose data is unchanged.
+export async function saveMany(items) {
+  let written = 0;
+  await tx(['records', 'outbox'], 'readwrite', async (t) => {
+    const rs = t.objectStore('records'), ob = t.objectStore('outbox');
+    for (const it of items) {
+      const cur = await reqP(rs.get(it.id));
+      if (cur && !cur.deleted && JSON.stringify(cur.data) === JSON.stringify(it.data)) continue;
+      const rec = { id: it.id, type: it.type, company_id: it.company_id, data: it.data, updated_at: stamp(), deleted: false };
+      rs.put(rec);
+      ob.put(rec);
+      written++;
+    }
+  });
+  if (written) emit({ local: true, bulk: true });
+  return written;
+}
+
+export async function has(id) {
+  const r = await get(id);
+  return !!(r && !r.deleted);
+}
+
 export async function remove(id) {
   const existing = await get(id);
   if (!existing) return;

@@ -2,8 +2,9 @@
 import * as db from './db.js';
 import * as sync from './sync.js';
 import { parseMoney, fmt, toInput, pct, splitTaxIncluded, summarizeEvent, DENOMINATIONS } from './money.js';
+import * as books from './books.js';
 
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.2.0';
 const COMPANY = 'default'; // one company for now; multi-company comes with the ledger
 const SETTINGS_ID = 'settings:default';
 
@@ -106,17 +107,21 @@ const routes = [
   [/^#\/event\/([\w-]+)\/deposit\/([\w-]+)$/, (m) => depositFormView(m[1], m[2])],
   [/^#\/event\/([\w-]+)$/, (m) => eventView(m[1])],
   [/^#\/settings$/, settingsView],
+  [/^#\/account\/([\w-]+)$/, (m, q) => books.accountView(m[1], q)],
+  [/^#\/line\/([\w-]+)$/, (m, q) => books.lineView(m[1], q)],
+  [/^#\/import$/, (m, q) => books.importView(q)],
 ];
 
 let currentIsForm = false;
 async function route() {
   const hash = location.hash || '#/';
+  const [path, qs] = hash.split('?');
   for (const [re, fn] of routes) {
-    const m = hash.match(re);
+    const m = path.match(re);
     if (m) {
       currentIsForm = false;
       setDock('');
-      await fn(m);
+      await fn(m, new URLSearchParams(qs || ''));
       return;
     }
   }
@@ -152,8 +157,11 @@ async function homeView() {
       <span class="chev" aria-hidden="true">&rsaquo;</span></a></li>`);
   }
 
+  const booksHtml = await books.accountsSection();
   $view.innerHTML = `
-    <h1>Events</h1>
+    <h1>${esc(settings.business_name || 'Shopbooks')}</h1>
+    ${booksHtml}
+    <h2>Events</h2>
     <p class="sub">Markets, fairs and pop-ups. Log cash and card sales each day; the totals and sales tax add themselves up.</p>
     ${rows.length ? `<ul class="rows">${rows.join('')}</ul>` : `
       <div class="empty"><strong>No events yet</strong>Add the next market or fair you're working. You can log your opening cash float now and each day's sales as you go.</div>`}
@@ -540,14 +548,14 @@ async function settingsView() {
     try {
       await sync.signIn(login.elements.passcode.value);
       await db.requestPersistence();
-      settingsView();
+      if (location.hash.startsWith('#/settings')) settingsView();
     } catch (err) {
       document.getElementById('lerr').textContent = navigator.onLine ? err.message : 'You are offline. Connect to turn on sync.';
       btn.disabled = false;
     }
   });
   const sn = document.getElementById('syncNow');
-  if (sn) sn.addEventListener('click', async () => { sn.disabled = true; await sync.syncNow(); settingsView(); });
+  if (sn) sn.addEventListener('click', async () => { sn.disabled = true; await sync.syncNow(); if (location.hash.startsWith('#/settings')) settingsView(); });
   const so = document.getElementById('signOut');
   if (so) so.addEventListener('click', async () => { await sync.signOut(); settingsView(); });
   document.getElementById('backup').addEventListener('click', async () => {
@@ -560,6 +568,11 @@ async function settingsView() {
 }
 
 // ---------- boot ----------
+
+books.init({
+  esc, renderBar, setDock, go, $view, COMPANY, niceDate,
+  setForm: (v) => { currentIsForm = v; },
+});
 
 sync.onStatus((s) => {
   syncStatus = s;

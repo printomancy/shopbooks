@@ -83,6 +83,7 @@ async function sync(body, env) {
       if (!isValidChange(c)) continue;
       const prev = existing.get(c.id);
       if (prev && prev >= c.updated_at) continue; // server copy is as new or newer
+      if (prev && body.insert_only) continue; // bulk loads never overwrite existing records
       seq += 1;
       accepted += 1;
       stmts.push(

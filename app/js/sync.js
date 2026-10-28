@@ -70,9 +70,12 @@ async function doSync() {
   setStatus({ state: 'syncing', error: null });
   try {
     let since = (await db.getMeta('cursor')) || 0;
-    let pushed = await db.outbox();
+    const BATCH = 200; // the server accepts up to 500 per request; stay well under
+    let pushed = (await db.outbox()).slice(0, BATCH);
     let more = true;
-    while (more) {
+    let rounds = 0;
+    while (more && rounds++ < 200) {
+      setStatus({ pending: (await db.outbox()).length });
       const res = await fetch('/api/sync', {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
@@ -89,9 +92,9 @@ async function doSync() {
       await db.applyRemote(body.changes);
       since = body.cursor;
       await db.setMeta('cursor', since);
-      more = body.more;
-      pushed = more ? [] : await db.outbox();
-      if (!more && pushed.length) more = true; // edits made while syncing
+      // keep going while the server has more to send or we still have edits to push
+      pushed = (await db.outbox()).slice(0, BATCH);
+      more = body.more || pushed.length > 0;
     }
     const lastSync = new Date().toISOString();
     await db.setMeta('lastSync', lastSync);
