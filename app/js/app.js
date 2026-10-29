@@ -4,9 +4,11 @@ import * as sync from './sync.js';
 import { parseMoney, fmt, toInput, pct, splitTaxIncluded, summarizeEvent, DENOMINATIONS } from './money.js';
 import * as books from './books.js';
 import * as taxes from './taxes.js';
+import * as inventory from './inventory.js';
+import { summarizeItemSales } from './inventory/stock.js';
 import { eventLines, cardCheck } from './ledger/events.js';
 
-const APP_VERSION = '0.5.0';
+const APP_VERSION = '0.6.0';
 const COMPANY = 'default'; // one company for now; multi-company comes with the ledger
 const SETTINGS_ID = 'settings:default';
 
@@ -138,10 +140,13 @@ const routes = [
   [/^#\/event\/([\w-]+)\/edit$/, (m) => eventFormView(m[1])],
   [/^#\/event\/([\w-]+)\/day\/new$/, (m) => dayFormView(m[1], null)],
   [/^#\/event\/([\w-]+)\/day\/([\w-]+)$/, (m) => dayFormView(m[1], m[2])],
+  [/^#\/event\/([\w-]+)\/sell$/, (m) => inventory.sellView(m[1])],
   [/^#\/event\/([\w-]+)\/deposit\/new$/, (m) => depositFormView(m[1], null)],
   [/^#\/event\/([\w-]+)\/deposit\/([\w-]+)$/, (m) => depositFormView(m[1], m[2])],
   [/^#\/event\/([\w-]+)$/, (m) => eventView(m[1])],
   [/^#\/settings$/, settingsView],
+  [/^#\/inventory$/, (m, q) => inventory.inventoryView(q)],
+  [/^#\/inventory\/load$/, () => inventory.loadView()],
   [/^#\/account\/([\w-]+)$/, (m, q) => books.accountView(m[1], q)],
   [/^#\/line\/([\w-]+)$/, (m, q) => books.lineView(m[1], q)],
   [/^#\/import$/, (m, q) => books.importView(q)],
@@ -197,6 +202,7 @@ async function homeView() {
 
   const booksHtml = await books.accountsSection();
   const taxHtml = await taxes.homeSection();
+  const invHtml = await inventory.homeSection();
   $view.innerHTML = `
     <h1>${esc(settings.business_name || 'Shopbooks')}</h1>
     ${booksHtml}
@@ -205,6 +211,7 @@ async function homeView() {
     <p class="sub">Markets, fairs and pop-ups. Log cash and card sales each day; the totals and sales tax add themselves up.</p>
     ${rows.length ? `<ul class="rows">${rows.join('')}</ul>` : `
       <div class="empty"><strong>No events yet</strong>Add the next market or fair you're working. You can log your opening cash float now and each day's sales as you go.</div>`}
+    ${invHtml}
     ${!settings.business_name ? `<div class="notice">Add your business name in <a href="#/settings">Settings</a>.</div>` : ''}
     <p class="foot">Shopbooks ${APP_VERSION} &middot; <a href="#/settings">Settings and sync</a></p>`;
   setDock(`<a class="btn btn-primary" href="#/event/new">Add event</a>`);
@@ -303,6 +310,7 @@ async function eventView(id) {
       <div class="main"><div class="name">${esc(niceDate(d.date))}</div><div class="meta">${esc(d.account || 'Deposit')}${d.note ? ' &middot; ' + esc(d.note) : ''}</div></div>
       <div class="amt">${fmt(d.amount_cents)}</div><span class="chev" aria-hidden="true">&rsaquo;</span></a></li>`).join('');
 
+  const itemsHtml = await inventory.eventSection(e, s.days);
   $view.innerHTML = `
     <h1>${esc(e.name)}</h1>
     <p class="sub">${esc(dateRange(e.start_date, e.end_date))}${e.county ? ` &middot; ${esc(e.county)} County` : ''} &middot; ${pct(s.rateBp)} tax included in prices</p>
@@ -320,6 +328,8 @@ async function eventView(id) {
 
     <h2>Days</h2>
     ${dayRows ? `<ul class="rows">${dayRows}</ul>` : `<div class="empty"><strong>No days logged</strong>At closing, count the cash box and enter the PayPal total for the day.</div>`}
+
+    ${itemsHtml}
 
     <h2>Cash box</h2>
     <section class="tape" aria-label="Cash box reconciliation">
@@ -345,12 +355,13 @@ async function eventView(id) {
       <button type="button" class="quiet" id="csv">Download as spreadsheet (CSV)</button>
       <a class="btn btn-quiet" href="#/event/${id}/edit">Edit event details</a>
     </div>`;
-  setDock(`<a class="btn btn-primary" href="#/event/${id}/day/new">Close out a day</a>`);
+  setDock(`<a class="btn btn-primary" href="#/event/${id}/sell">Sell items</a><a class="btn" href="#/event/${id}/day/new">Close out a day</a>`);
 
-  document.getElementById('csv').addEventListener('click', () => downloadEventCsv(e, s, deposits));
+  inventory.wireEventSection(e);
+  document.getElementById('csv').addEventListener('click', async () => downloadEventCsv(e, s, deposits, await inventory.itemSales(id)));
 }
 
-function downloadEventCsv(e, s, deposits) {
+function downloadEventCsv(e, s, deposits, sales = []) {
   const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const d2 = (c) => (c === null || c === undefined ? '' : (c / 100).toFixed(2));
   const lines = [
@@ -362,6 +373,13 @@ function downloadEventCsv(e, s, deposits) {
     ...deposits.map((d) => [d.date, d.account, d2(d.amount_cents), d.note]),
     ['Opening float', '', d2(s.cash.float)], ['Not deposited yet', '', d2(s.cash.notDeposited)],
   ];
+  const live = sales.filter((x) => !x.deleted).sort((a, b) => (a.sold_at || '').localeCompare(b.sold_at || ''));
+  if (live.length) {
+    const it = summarizeItemSales(live);
+    lines.push([], ['Items sold'], ['Date', 'Product', 'Qty', 'Price each', 'Total', 'Paid by'],
+      ...live.map((x) => [x.date, x.name, x.qty, d2(x.price_cents), d2(x.qty * x.price_cents), x.method === 'cash' ? 'Cash' : 'Card']),
+      ['Total', '', it.units, '', d2(it.gross)]);
+  }
   const csv = lines.map((r) => r.map(q).join(',')).join('\r\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
@@ -395,6 +413,12 @@ async function dayFormView(eventId, dayId) {
     return s.days[s.days.length - 1].opening;
   };
 
+  const tapped = {}; // item sales tapped per date, shown as a check while closing out
+  for (const x of await inventory.itemSales(eventId)) {
+    const t0 = (tapped[x.date] ||= { cash: 0, card: 0, units: 0 });
+    t0[x.method === 'cash' ? 'cash' : 'card'] += x.qty * x.price_cents;
+    t0.units += x.qty;
+  }
   renderBar({ title: existing ? niceDate(existing.date, { weekday: true }) : 'Close out a day', back: `#/event/${eventId}` });
   $view.innerHTML = `
     <form id="f" novalidate>
@@ -461,6 +485,8 @@ async function dayFormView(eventId, dayId) {
       <div class="line total"><span class="k">Total sales today</span><span class="lead"></span><span class="v">${fmt(gross)}</span></div>
       <div class="line"><span class="k">Before tax</span><span class="lead"></span><span class="v">${fmt(taxable)}</span></div>
       <div class="line"><span class="k">Sales tax inside (${pct(rateBp)})</span><span class="lead"></span><span class="v">${fmt(tax)}</span></div>
+      ${tapped[date] ? `<div class="line muted"><span class="k">Items tapped: cash</span><span class="lead"></span><span class="v">${fmt(tapped[date].cash)}</span></div>
+      <div class="line muted"><span class="k">Items tapped: card</span><span class="lead"></span><span class="v">${fmt(tapped[date].card)}</span></div>` : ''}
       ${cashSales !== null && cashSales < 0 ? `<div class="notice">Cash sales came out negative. Check the opening and closing counts.</div>` : ''}`;
     document.getElementById('countSum').textContent = fmt(countTotal());
   }
@@ -642,11 +668,12 @@ async function settingsView() {
 // ---------- boot ----------
 
 const uiCtx = {
-  esc, renderBar, setDock, go, $view, COMPANY, niceDate,
+  esc, renderBar, setDock, go, $view, COMPANY, niceDate, today, getEvent,
   setForm: (v) => { currentIsForm = v; },
 };
 books.init(uiCtx);
 taxes.init(uiCtx);
+inventory.init(uiCtx);
 
 sync.onStatus((s) => {
   syncStatus = s;
